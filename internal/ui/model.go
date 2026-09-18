@@ -119,10 +119,15 @@ type Model struct {
 
 	// Search, vim-style. searchInput is true while the / prompt is open; typed
 	// is the query being edited; search is the confirmed query that n / N repeat
-	// and esc clears.
-	searchInput bool
-	typed       string
-	search      string
+	// and esc clears. commitSearch is the same thing for the commits panel, kept
+	// apart so a search in one panel does not clobber the other. searchPanel is
+	// which panel had focus when / was pressed, so Enter still lands there if a
+	// resize during typing changes panelFocus().
+	searchInput  bool
+	typed        string
+	search       string
+	commitSearch string
+	searchPanel  panel
 
 	// context is how many unchanged lines surround each hunk (git's -U). + and -
 	// re-diff with more or less. Git review mode only, since it re-sources.
@@ -628,20 +633,31 @@ func (m *Model) command(key string) tea.Cmd {
 
 	case "/":
 		m.searchInput, m.typed = true, ""
+		m.searchPanel = m.panelFocus()
 	case "n":
 		// When a search is active, n repeats it (vim); otherwise it is the next
-		// hunk, as always.
-		if m.search != "" {
+		// hunk, as always. The commits panel has its own query. Gate on the
+		// panel alone so n/N do not fall through to the diff search while
+		// commits are focused with an empty query; jumpCommitMatch no-ops.
+		if m.panelFocus() == focusCommits {
+			m.jumpCommitMatch(1)
+		} else if m.search != "" {
 			m.jumpMatch(1)
 		} else {
 			m.moveTo(NextIndex(m.view.HunkRows, m.cur))
 		}
 	case "N":
-		if m.search != "" {
+		if m.panelFocus() == focusCommits {
+			m.jumpCommitMatch(-1)
+		} else if m.search != "" {
 			m.jumpMatch(-1)
 		}
 	case "esc":
-		m.search = ""
+		if m.panelFocus() == focusCommits {
+			m.commitSearch = ""
+		} else {
+			m.search = ""
+		}
 	case "p":
 		m.moveTo(PrevIndex(m.view.HunkRows, m.cur))
 	case "]":
@@ -771,9 +787,16 @@ func (m *Model) searchKey(msg tea.KeyPressMsg) {
 		m.searchInput, m.typed = false, ""
 	case "enter":
 		m.searchInput = false
-		m.search = m.typed
-		if m.search != "" {
-			m.jumpMatchFrom(m.cur, 1, true)
+		if m.searchPanel == focusCommits {
+			m.commitSearch = m.typed
+			if m.commitSearch != "" {
+				m.jumpCommitMatchFrom(m.commitIdx, 1, true)
+			}
+		} else {
+			m.search = m.typed
+			if m.search != "" {
+				m.jumpMatchFrom(m.cur, 1, true)
+			}
 		}
 	case "backspace":
 		if r := []rune(m.typed); len(r) > 0 {
@@ -842,18 +865,54 @@ func (m *Model) jumpMatchFrom(from, dir int, inclusive bool) {
 	if n == 0 || m.search == "" {
 		return
 	}
-	start := from
+	idx := searchWrap(n, from, dir, inclusive, func(i int) bool {
+		return matchText(m.rowSearchText(i), m.search)
+	})
+	if idx < 0 {
+		m.msg = "no match: " + m.search
+		return
+	}
+	m.moveTo(idx)
+}
+
+func (m *Model) jumpCommitMatch(dir int) { m.jumpCommitMatchFrom(m.commitIdx, dir, false) }
+
+func (m *Model) jumpCommitMatchFrom(from, dir int, inclusive bool) {
+	n := len(m.commits)
+	if n == 0 || m.commitSearch == "" {
+		return
+	}
+	idx := searchWrap(n, from, dir, inclusive, func(i int) bool {
+		return matchText(commitSearchText(m.commits[i]), m.commitSearch)
+	})
+	if idx < 0 {
+		m.msg = "no match: " + m.commitSearch
+		return
+	}
+	m.loadCommit(idx)
+}
+
+// searchWrap walks n items from start in dir, wrapping with the same modulo
+// indexing both commit and diff search use. inclusive includes start;
+// otherwise the walk begins at start+dir. Returns the first match, or -1.
+func searchWrap(n, start, dir int, inclusive bool, match func(int) bool) int {
+	if n == 0 {
+		return -1
+	}
 	if !inclusive {
-		start = from + dir
+		start += dir
 	}
 	for i := 0; i < n; i++ {
 		idx := ((start+dir*i)%n + n) % n
-		if matchText(m.rowSearchText(idx), m.search) {
-			m.moveTo(idx)
-			return
+		if match(idx) {
+			return idx
 		}
 	}
-	m.msg = "no match: " + m.search
+	return -1
+}
+
+func commitSearchText(c git.Commit) string {
+	return c.Subject + " " + c.Author
 }
 
 // rowSearchText is everything on a row a search can hit: its header text and
@@ -1828,6 +1887,11 @@ func (m *Model) renderStatus() string {
 		if m.width >= logAuthorWidth {
 			tail += fmt.Sprintf("  ·  %s, %s", c.Author, c.Rel)
 		}
+		if m.panelFocus() == focusCommits && m.commitSearch != "" {
+			tail += "  ·  /" + m.commitSearch
+		} else if m.search != "" {
+			tail += "  ·  /" + m.search
+		}
 		if m.ignoreWS {
 			tail += "  ·  ≈ ws"
 		}
@@ -1887,6 +1951,7 @@ func (m *Model) renderHelp() string {
 			[2]string{"", ""},
 			[2]string{"} / {", "older / newer commit"},
 			[2]string{"ctrl-w", "focus the diff, then commits, then files"},
+			[2]string{"/ then n / N", "search commits by subject or author (commits panel)"},
 			[2]string{"i", "ignore / show whitespace-only changes"},
 			[2]string{"+ / -", "more / less context around each hunk"},
 		)
