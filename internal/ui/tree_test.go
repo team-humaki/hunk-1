@@ -35,9 +35,45 @@ func filePaths(m *Model) []string {
 	return out
 }
 
+func TestComparePaths(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"install.sh", "internal/ui/tree.go", 1},
+		{"internal/ui/tree.go", "install.sh", -1},
+		{"main.go", "internal/ui/tree.go", 1},
+		{"internal/ui/tree.go", "main.go", -1},
+		{"a/b.go", "a.go", -1},
+		{"a.go", "a/b.go", 1},
+		{"a.go", "b.go", -1},
+		{"b.go", "a.go", 1},
+		{"a/x.go", "b/x.go", -1},
+		{"b/x.go", "a/x.go", 1},
+		{"a/b/c.go", "a/z.go", -1},
+		{"a/z.go", "a/b/c.go", 1},
+		{"a/b/c.go", "a/b/d.go", -1},
+		{"same.go", "same.go", 0},
+	}
+	sign := func(n int) int {
+		if n < 0 {
+			return -1
+		}
+		if n > 0 {
+			return 1
+		}
+		return 0
+	}
+	for _, tt := range tests {
+		if got := sign(comparePaths(tt.a, tt.b)); got != sign(tt.want) {
+			t.Errorf("comparePaths(%q, %q) = %d, want sign of %d", tt.a, tt.b, comparePaths(tt.a, tt.b), tt.want)
+		}
+	}
+}
+
 func TestFilesAreInTreeOrder(t *testing.T) {
 	m := newTestModel(t, treeDiff(treePaths...))
-	want := []string{"README", "a/b/c.go", "a/z.go", "a.go", "b.go"}
+	want := []string{"a/b/c.go", "a/z.go", "README", "a.go", "b.go"}
 	if got := filePaths(m); !slices.Equal(got, want) {
 		t.Errorf("files = %v, want %v", got, want)
 	}
@@ -48,11 +84,11 @@ func TestBuildTreeDrawsConnectors(t *testing.T) {
 	tree := buildTree(m.files, nil)
 
 	want := []string{
-		"├─README",
 		"├─a",
 		"│ ├─b",
 		"│ │ └─c.go",
 		"│ └─z.go",
+		"├─README",
 		"├─a.go",
 		"└─b.go",
 	}
@@ -65,14 +101,14 @@ func TestBuildTreeDrawsConnectors(t *testing.T) {
 	}
 
 	// Directories hold the run of files beneath them and are never a file.
-	if a := tree[1]; a.file != -1 || a.lo != 1 || a.hi != 3 {
-		t.Errorf("a/ = file %d [%d,%d), want a directory over [1,3)", a.file, a.lo, a.hi)
+	if a := tree[0]; a.file != -1 || a.lo != 0 || a.hi != 2 {
+		t.Errorf("a/ = file %d [%d,%d), want a directory over [0,2)", a.file, a.lo, a.hi)
 	}
-	if b := tree[2]; b.file != -1 || b.lo != 1 || b.hi != 2 {
-		t.Errorf("a/b/ = file %d [%d,%d), want a directory over [1,2)", b.file, b.lo, b.hi)
+	if b := tree[1]; b.file != -1 || b.lo != 0 || b.hi != 1 {
+		t.Errorf("a/b/ = file %d [%d,%d), want a directory over [0,1)", b.file, b.lo, b.hi)
 	}
-	if c := tree[3]; c.file != 1 {
-		t.Errorf("c.go points at file %d, want 1", c.file)
+	if c := tree[2]; c.file != 0 {
+		t.Errorf("c.go points at file %d, want 0", c.file)
 	}
 }
 
@@ -80,8 +116,8 @@ func TestSidebarDrawsTheTree(t *testing.T) {
 	m := newTestModel(t, treeDiff(treePaths...))
 	lines := screen(t, m, 120, 12)
 
-	for i, want := range []string{"├─README", "├─a/", "│ ├─b/", "│ │ └─c.go", "└─b.go"} {
-		row := []int{0, 1, 2, 3, 6}[i]
+	for i, want := range []string{"├─a/", "│ ├─b/", "│ │ └─c.go", "└─b.go"} {
+		row := []int{0, 1, 2, 6}[i]
 		if !strings.Contains(lines[row], want) {
 			t.Errorf("sidebar row %d = %q, want it to contain %q", row, lines[row], want)
 		}
@@ -136,7 +172,11 @@ func TestFileKeysFollowTheTree(t *testing.T) {
 	}
 	m.moveTo(0)
 	m.command("ctrl+w")
-	// j also stops on directories; those leave the current file alone.
+	// File 0 may sit below directory rows, so walk to the top first. j also
+	// stops on directories; those leave the current file alone.
+	for range buildTree(m.files, nil) {
+		m.command("k")
+	}
 	for range buildTree(m.files, nil) {
 		if m.treeDir == "" {
 			tree = append(tree, m.files[m.currentFile()].Path())
@@ -168,14 +208,14 @@ func TestClickOnDirectoryDoesNothing(t *testing.T) {
 	m.moveTo(m.view.FileRows[3])
 	cur := m.cur
 
-	m = clickAt(t, m, 3, 1) // a/
+	m = clickAt(t, m, 3, 0) // a/
 	if m.cur != cur || m.focus != focusDiff {
 		t.Errorf("click on a directory moved cursor %d -> %d, focus %v", cur, m.cur, m.focus)
 	}
 
-	m = clickAt(t, m, 3, 3) // c.go
-	if m.currentFile() != 1 || m.focus != focusTree {
-		t.Errorf("click on c.go: file %d focus %v, want file 1 and the tree", m.currentFile(), m.focus)
+	m = clickAt(t, m, 3, 2) // c.go
+	if m.currentFile() != 0 || m.focus != focusTree {
+		t.Errorf("click on c.go: file %d focus %v, want file 0 and the tree", m.currentFile(), m.focus)
 	}
 	m = clickAt(t, m, sidebarWidth+4, 2)
 	if m.focus != focusDiff {
@@ -343,18 +383,18 @@ func TestDirectoryTurnsGreenWhenEverythingUnderItIsApproved(t *testing.T) {
 		return strings.Contains(m.treeRow(tree, i, sidebarWidth, false), want)
 	}
 
-	if green(1) || green(2) {
+	if green(0) || green(1) {
 		t.Fatal("directories are green with nothing marked")
 	}
-	m.marks.set(1, 0, true) // a/b/c.go
-	if !green(2) {
+	m.marks.set(0, 0, true) // a/b/c.go
+	if !green(1) {
 		t.Error("a/b/ is not green with its only file marked")
 	}
-	if green(1) {
+	if green(0) {
 		t.Error("a/ is green with a/z.go still unmarked")
 	}
-	m.marks.set(2, 0, true) // a/z.go
-	if !green(1) {
+	m.marks.set(1, 0, true) // a/z.go
+	if !green(0) {
 		t.Error("a/ is not green once every file under it is marked")
 	}
 }
@@ -422,9 +462,11 @@ func TestFoldingADirectory(t *testing.T) {
 	m := newTestModel(t, treeDiff(treePaths...))
 	screen(t, m, 120, 20)
 	m.command("ctrl+w")
-	m.command("j") // README -> a/
+	// Tree starts on a/b/c.go; k twice lands on a/.
+	m.command("k") // c.go -> b/
+	m.command("k") // b/ -> a/
 	if m.treeDir != "a" || m.currentFile() != 0 {
-		t.Fatalf("j onto a/ selected %q with file %d, want a with README still current", m.treeDir, m.currentFile())
+		t.Fatalf("k onto a/ selected %q with file %d, want a with a/b/c.go still current", m.treeDir, m.currentFile())
 	}
 	names := func() (out []string) {
 		for _, l := range buildTree(m.files, m.collapsed) {
@@ -435,15 +477,15 @@ func TestFoldingADirectory(t *testing.T) {
 
 	// space folds it: its line stays, everything under it goes.
 	m.command("space")
-	if want := []string{"README", "a", "a.go", "b.go"}; !slices.Equal(names(), want) {
+	if want := []string{"a", "README", "a.go", "b.go"}; !slices.Equal(names(), want) {
 		t.Fatalf("space on a/ drew %v, want %v", names(), want)
 	}
 	if out := strings.Join(screen(t, m, 120, 20), "\n"); !strings.Contains(ansi.Strip(out), "├+a/") {
 		t.Errorf("folded a/ has no +:\n%s", out)
 	}
 	m.command("j")
-	if m.files[m.currentFile()].Path() != "a.go" {
-		t.Errorf("j past folded a/ landed on %s, want a.go", m.files[m.currentFile()].Path())
+	if m.files[m.currentFile()].Path() != "README" {
+		t.Errorf("j past folded a/ landed on %s, want README", m.files[m.currentFile()].Path())
 	}
 	m.command("k")
 	m.command("+")
@@ -457,9 +499,10 @@ func TestFoldingADirectory(t *testing.T) {
 
 	// [ leaves the directory for a file and does not unfold it; a file hidden
 	// inside the fold is shown by highlighting the fold.
-	m.command("[") // from a.go
+	m.command("j") // README
+	m.command("[") // from README to a/z.go, hidden
 	if m.treeDir != "" || m.files[m.currentFile()].Path() != "a/z.go" {
-		t.Errorf("[ from a/ gave dir %q file %s", m.treeDir, m.files[m.currentFile()].Path())
+		t.Errorf("[ from README gave dir %q file %s", m.treeDir, m.files[m.currentFile()].Path())
 	}
 	if tree := buildTree(m.files, m.collapsed); tree[m.treeSel(tree)].name != "a" {
 		t.Errorf("hidden a/z.go highlights %s, want a/", tree[m.treeSel(tree)].name)

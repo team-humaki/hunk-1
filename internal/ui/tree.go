@@ -19,10 +19,25 @@ type treeLine struct {
 	lo, hi int
 }
 
-// comparePaths orders paths the way a tree walks them: segment by segment, so
-// everything under a/ comes before a.go even though '.' sorts before '/'.
+// comparePaths orders paths the way a tree walks them: at each level,
+// directories (paths that keep going) before files (paths that end), then
+// alphabetically. That keeps every subtree in one run and puts loose files
+// after the directory spine, the way a file explorer does.
 func comparePaths(a, b string) int {
-	return slices.Compare(strings.Split(a, "/"), strings.Split(b, "/"))
+	as, bs := strings.Split(a, "/"), strings.Split(b, "/")
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		aLeaf, bLeaf := i == len(as)-1, i == len(bs)-1
+		if aLeaf != bLeaf {
+			if aLeaf {
+				return 1
+			}
+			return -1
+		}
+		if c := strings.Compare(as[i], bs[i]); c != 0 {
+			return c
+		}
+	}
+	return 0
 }
 
 // sortFiles puts files in tree order, so a file's index is also its position in
