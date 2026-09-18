@@ -495,7 +495,7 @@ func TestConsumeUnstageClearsPatchBeforeWholeFilesFail(t *testing.T) {
 			}
 			return nil
 		},
-		func(paths []string) error {
+		func(_ []string) error {
 			unstageN++
 			return fmt.Errorf("index.lock")
 		},
