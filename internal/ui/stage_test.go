@@ -480,6 +480,54 @@ func TestUndoUnstagesTheLastStage(t *testing.T) {
 	}
 }
 
+// Each stage is its own undo entry. Stage twice, undo twice: the first "u"
+// reverses only the second stage, the next "u" reverses the first, and a
+// third "u" has nothing left.
+func TestUndoReversesEachStageInOrder(t *testing.T) {
+	base := lines(60)
+	edited := replaceLine(base, 5, "FIRST")
+	edited = replaceLine(edited, 30, "SECOND")
+
+	m, repo := gitModel(t, map[string]string{"a.txt": base}, map[string]string{"a.txt": edited})
+
+	m.moveTo(m.view.HunkRows[0])
+	m.handleKey(keyPress(" "))
+	m.handleKey(keyPress("w"))
+	if cached := gitOut(t, repo, "diff", "--cached"); !strings.Contains(cached, "FIRST") {
+		t.Fatalf("first stage missed FIRST:\n%s", cached)
+	}
+
+	if len(m.files) != 1 || len(m.files[0].Hunks) != 1 {
+		t.Fatalf("after first stage want 1 remaining hunk, got %d files", len(m.files))
+	}
+	m.moveTo(m.view.HunkRows[0])
+	m.handleKey(keyPress(" "))
+	m.handleKey(keyPress("w"))
+	cached := gitOut(t, repo, "diff", "--cached")
+	if !strings.Contains(cached, "FIRST") || !strings.Contains(cached, "SECOND") {
+		t.Fatalf("both hunks should be staged:\n%s", cached)
+	}
+
+	m.handleKey(keyPress("u"))
+	cached = gitOut(t, repo, "diff", "--cached")
+	if strings.Contains(cached, "SECOND") {
+		t.Errorf("first undo should unstage SECOND only:\n%s", cached)
+	}
+	if !strings.Contains(cached, "FIRST") {
+		t.Errorf("first undo should leave FIRST staged:\n%s", cached)
+	}
+
+	m.handleKey(keyPress("u"))
+	if cached := gitOut(t, repo, "diff", "--cached"); strings.TrimSpace(cached) != "" {
+		t.Errorf("second undo left something staged:\n%s", cached)
+	}
+
+	m.handleKey(keyPress("u"))
+	if !strings.Contains(m.msg, "nothing to undo") {
+		t.Errorf("third undo message = %q", m.msg)
+	}
+}
+
 func TestStagingNothingMarkedAsksForAMark(t *testing.T) {
 	base := lines(20)
 	m, repo := gitModel(t,

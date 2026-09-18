@@ -164,21 +164,32 @@ func (m *Model) stageMarked() (string, error) {
 		return "", err
 	}
 
-	// Remember exactly what went in so "u" can reverse this stage and nothing
-	// else.
-	m.lastPatch, m.lastWhole = patch.String(), wholeFiles
+	// Push this stage so "u" can reverse it without forgetting earlier ones.
+	m.undoStack = append(m.undoStack, stageRecord{patch: patch.String(), whole: wholeFiles})
 
 	hunks, files := m.marks.total()
 	return fmt.Sprintf("staged %s in %s", plural(hunks, "hunk"), plural(files, "file")), nil
 }
 
+// stageRecord is one stageMarked call: a hunk patch and/or whole files.
+type stageRecord struct {
+	patch string
+	whole []string
+}
+
 // unstageLast reverses the most recent stage: the hunk patch comes back out of
-// the index, and any whole files staged alongside it are removed too.
+// the index, and any whole files staged alongside it are removed too. Earlier
+// stages stay on the stack.
 func (m *Model) unstageLast() error {
-	if err := m.repo.UnapplyCached(m.lastPatch); err != nil {
+	rec := m.undoStack[len(m.undoStack)-1]
+	if err := m.repo.UnapplyCached(rec.patch); err != nil {
 		return err
 	}
-	return m.repo.UnstageFiles(m.lastWhole)
+	if err := m.repo.UnstageFiles(rec.whole); err != nil {
+		return err
+	}
+	m.undoStack = m.undoStack[:len(m.undoStack)-1]
+	return nil
 }
 
 // markSnapshot captures a file's marks by content rather than by index, so they

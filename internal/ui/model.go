@@ -90,10 +90,9 @@ type Model struct {
 	marks marks
 	msg   string
 
-	// lastPatch and lastWhole record the most recent stage so "u" can take it
-	// straight back out of the index — the undo for w.
-	lastPatch string
-	lastWhole []string
+	// undoStack records each stage so "u" can reverse them one at a time,
+	// most recent first. A single slot would lose every stage but the last.
+	undoStack []stageRecord
 
 	// staged and unstaged are the paths git reports as having index and
 	// working-tree changes, so the sidebar can show what is already approved.
@@ -1166,9 +1165,10 @@ func (m *Model) stage() {
 }
 
 // undo reverses the most recent stage, putting those changes back into the
-// working tree exactly as they were before w.
+// working tree exactly as they were before w. Earlier stages stay on the
+// stack so another "u" can reverse them too.
 func (m *Model) undo() {
-	if m.lastPatch == "" && len(m.lastWhole) == 0 {
+	if len(m.undoStack) == 0 {
 		m.msg = "nothing to undo"
 		return
 	}
@@ -1176,9 +1176,12 @@ func (m *Model) undo() {
 		m.msg = "undo failed: " + firstLine(err.Error())
 		return
 	}
-	m.lastPatch, m.lastWhole = "", nil
 	if err := m.reload(); err != nil {
 		m.msg = "undone (could not re-read the working tree: " + firstLine(err.Error()) + ")"
+		return
+	}
+	if len(m.undoStack) > 0 {
+		m.msg = "undone — back to unstaged  ·  u to undo more"
 		return
 	}
 	m.msg = "undone — back to unstaged"
