@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -141,7 +142,9 @@ func (m *Model) commitLine(idx, w int) string {
 	if idx == m.commitIdx {
 		style = m.st.sidebarSel
 	}
-	label := fmt.Sprintf(" %s  %s", c.Short, clip(c.Subject, w-lipgloss.Width(c.Short)-3))
+	subjW := w - lipgloss.Width(c.Short) - 3
+	subj := m.clipOrMarquee("commit:"+c.SHA, c.Subject, subjW, idx == m.commitIdx)
+	label := fmt.Sprintf(" %s  %s", c.Short, subj)
 	return fit(style.Render(label), 0, w, style)
 }
 
@@ -163,3 +166,57 @@ func (m *Model) sidebarHeader(label string, w int, focused bool) string {
 // clip shortens text from the right, which is where a commit subject or a
 // file name in the tree gets less informative.
 func clip(s string, w int) string { return ansi.Truncate(s, w, "…") }
+
+// marqueeHold is how many frames the selected name sits still at each end
+// (~2s at marqueeStep). marqueeStep is one column of scroll.
+const (
+	marqueeHold = 11
+	marqueeStep = 180 * time.Millisecond
+)
+
+// marqueeTickMsg is one frame of the selected-row name scroll.
+type marqueeTickMsg struct{}
+
+// marquee returns the window of s visible at frame, for a name that does not
+// fit in w columns. A name that fits is unchanged on every frame. Hold frames
+// at each end show the same window; the last scroll frame shows the end of the
+// name; wrapping returns to frame 0's output.
+func marquee(s string, w, frame int) string {
+	if w <= 0 {
+		return ""
+	}
+	sw := ansi.StringWidth(s)
+	if sw <= w {
+		return s
+	}
+	maxOff := sw - w
+	cycle := 2*marqueeHold + maxOff
+	if frame < 0 {
+		frame = 0
+	}
+	f := frame % cycle
+	var off int
+	switch {
+	case f < marqueeHold:
+		off = 0
+	case f < marqueeHold+maxOff:
+		off = f - marqueeHold + 1
+	default:
+		off = maxOff
+	}
+	return ansi.Cut(s, off, off+w)
+}
+
+// clipOrMarquee clips an unselected name with an ellipsis, and scrolls a
+// selected name that does not fit. Changing key snaps the scroll back to the
+// start of the name.
+func (m *Model) clipOrMarquee(key, s string, w int, sel bool) string {
+	if !sel {
+		return clip(s, w)
+	}
+	if m.marqueeKey != key {
+		m.marqueeKey = key
+		m.marqueeFrame = 0
+	}
+	return marquee(s, w, m.marqueeFrame)
+}

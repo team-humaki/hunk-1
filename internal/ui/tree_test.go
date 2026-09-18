@@ -152,12 +152,35 @@ func TestTreeFillsTheScreenExactly(t *testing.T) {
 }
 
 func TestTreeTruncatesNamesButKeepsCounts(t *testing.T) {
+	m := newTestModel(t, treeDiff(
+		"a_really_quite_long_file_name_indeed.go",
+		"second_also_quite_long_file_name.go",
+	))
+	m.sideWidth = SidebarWidthMin
+	lines := screen(t, m, 120, 6)
+	sel := ansi.Cut(lines[0], 0, SidebarWidthMin)
+	other := ansi.Cut(lines[1], 0, SidebarWidthMin)
+	if strings.Contains(sel, "…") {
+		t.Errorf("selected row = %q, want a window not an ellipsis", sel)
+	}
+	if !strings.HasSuffix(strings.TrimRight(sel, " "), "+1 -1") {
+		t.Errorf("selected row = %q, want counts flush right", sel)
+	}
+	if !strings.Contains(other, "…") || !strings.Contains(other, "+1 -1") {
+		t.Errorf("unselected row = %q, want a clipped name and its counts", other)
+	}
+}
+
+func TestSelectedTreeNameMarqueeKeepsCounts(t *testing.T) {
 	m := newTestModel(t, treeDiff("a_really_quite_long_file_name_indeed.go"))
 	m.sideWidth = SidebarWidthMin
-	line := screen(t, m, 120, 5)[0]
-	side := ansi.Cut(line, 0, SidebarWidthMin)
-	if !strings.Contains(side, "…") || !strings.Contains(side, "+1 -1") {
-		t.Errorf("sidebar row = %q, want a clipped name and its counts", side)
+	m.marqueeFrame = marqueeHold + 8
+	side := ansi.Cut(screen(t, m, 120, 5)[0], 0, SidebarWidthMin)
+	if !strings.HasSuffix(strings.TrimRight(side, " "), "+1 -1") {
+		t.Errorf("scrolled selected row = %q, want counts flush right", side)
+	}
+	if ansi.StringWidth(side) != SidebarWidthMin {
+		t.Errorf("scrolled selected row width %d, want %d", ansi.StringWidth(side), SidebarWidthMin)
 	}
 }
 
