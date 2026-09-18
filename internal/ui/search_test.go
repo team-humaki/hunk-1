@@ -213,3 +213,61 @@ func TestCommitAndDiffSearchStayIndependent(t *testing.T) {
 		t.Fatalf("n on the diff panel used the commit query: search=%q", m.search)
 	}
 }
+
+func TestNOnCommitsWithoutQueryDoesNotSearchDiff(t *testing.T) {
+	m, _ := logModel(t)
+	screen(t, m, 140, 24)
+	runSearch(t, m, "hello")
+	diffAt := m.cur
+	focusCommitsPanel(t, m)
+	commitAt := m.commitIdx
+
+	m.command("n")
+	if m.cur != diffAt {
+		t.Errorf("n on commits with an empty query moved the diff cursor: %d -> %d", diffAt, m.cur)
+	}
+	if m.commitIdx != commitAt {
+		t.Errorf("n on commits with an empty query moved the commit: %d -> %d", commitAt, m.commitIdx)
+	}
+}
+
+func TestSearchEnterUsesPanelCapturedAtSlash(t *testing.T) {
+	m, _ := logModel(t)
+	screen(t, m, 140, 24)
+	focusCommitsPanel(t, m)
+
+	m.handleKey(keyPress("/"))
+	if m.searchPanel != focusCommits {
+		t.Fatalf("slash captured panel %v, want commits", m.searchPanel)
+	}
+	for _, r := range "two" {
+		m.handleKey(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	// A resize during typing can change panelFocus(); Enter must still use
+	// the panel from when / was pressed.
+	m.focus = focusDiff
+	m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.commitSearch != "two" || m.search != "" {
+		t.Fatalf("enter followed live focus: commitSearch=%q search=%q", m.commitSearch, m.search)
+	}
+	if m.commitIdx != 1 {
+		t.Fatalf("commit search landed on %d, want 1", m.commitIdx)
+	}
+}
+
+func TestSearchWrapInclusiveAndWraps(t *testing.T) {
+	hits := map[int]bool{1: true, 3: true}
+	match := func(i int) bool { return hits[i] }
+	if got := searchWrap(4, 1, 1, false, match); got != 3 {
+		t.Errorf("next from 1 exclusive = %d, want 3", got)
+	}
+	if got := searchWrap(4, 3, 1, false, match); got != 1 {
+		t.Errorf("wrap from 3 = %d, want 1", got)
+	}
+	if got := searchWrap(4, 1, 1, true, match); got != 1 {
+		t.Errorf("inclusive from a hit = %d, want 1", got)
+	}
+	if got := searchWrap(4, 0, 1, true, func(int) bool { return false }); got != -1 {
+		t.Errorf("no match = %d, want -1", got)
+	}
+}
