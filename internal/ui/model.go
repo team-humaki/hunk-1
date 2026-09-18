@@ -550,8 +550,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case editorDoneMsg:
 		// Whatever was saved should be on screen now, followed or not.
 		m.liveReload()
-		if msg.err != nil {
-			return m, m.toast("editor: " + firstLine(msg.err.Error()))
+		if text := editorDoneToast(msg); text != "" {
+			return m, m.toast(text)
 		}
 		return m, nil
 

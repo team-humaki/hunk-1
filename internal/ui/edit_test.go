@@ -215,8 +215,23 @@ func TestEditorDoneReloadsAndKeepsPlace(t *testing.T) {
 		t.Error("cursor left the hunk it was on")
 	}
 
-	m.Update(editorDoneMsg{err: errors.New("exit status 1")})
-	if !strings.Contains(m.toastText, "editor: exit status 1") {
-		t.Errorf("toast = %q, want the editor's failure", m.toastText)
+	m.Update(editorDoneMsg{err: errors.New("exit status 1"), editor: "vim"})
+	if !strings.Contains(m.toastText, "vim: exit status 1") {
+		t.Errorf("toast = %q, want the editor's failure with its name", m.toastText)
+	}
+
+	m.Update(editorDoneMsg{err: errors.New("exit status 127"), editor: "hx", exitCode: 127})
+	if !strings.Contains(m.toastText, "`hx` not found") {
+		t.Errorf("toast = %q, want command-not-found guidance", m.toastText)
+	}
+
+	m.Update(editorDoneMsg{editor: "code", path: "a.txt", elapsed: 100 * time.Millisecond})
+	if !strings.Contains(m.toastText, "code --wait") {
+		t.Errorf("toast = %q, want wait-flag guidance", m.toastText)
+	}
+
+	m.Update(editorDoneMsg{editor: "vim", path: "a.txt", elapsed: time.Second})
+	if !strings.Contains(m.toastText, "reloaded a.txt") {
+		t.Errorf("toast = %q, want successful reload confirmation", m.toastText)
 	}
 }

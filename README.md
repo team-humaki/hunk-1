@@ -122,7 +122,9 @@ review mode you get:
 the line under the cursor. Quit the editor and hunk comes back with the diff
 re-read and your marks and place kept. hunk recognizes the line-jump syntax for
 Helix, VS Code, Sublime Text and Zed; other editors receive `+line file`. With
-both variables unset, hunk says so instead of guessing.
+both variables unset, hunk says so instead of guessing. When the editor exits,
+hunk names editor failures, hints when a GUI editor may need `--wait`, and
+confirms which file was reloaded after a successful edit.
 
 Marking is `git add -p` without the one-hunk-at-a-time straitjacket: see the
 whole change, jump around, mark as you go, then write it all at once.
