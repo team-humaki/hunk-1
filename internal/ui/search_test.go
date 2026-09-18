@@ -99,3 +99,117 @@ func TestEscClearsSearchSoNReturnsToHunkNav(t *testing.T) {
 		t.Error("with search cleared, n should move to the next hunk")
 	}
 }
+
+func focusCommitsPanel(t *testing.T, m *Model) {
+	t.Helper()
+	m.command("ctrl+w")
+	if m.panelFocus() != focusCommits {
+		t.Fatalf("ctrl+w did not focus the commits panel: got %v", m.panelFocus())
+	}
+}
+
+func TestCommitSearchMatchesSubject(t *testing.T) {
+	m, _ := logModel(t)
+	screen(t, m, 140, 24)
+	focusCommitsPanel(t, m)
+
+	runSearch(t, m, "two")
+	if m.commitSearch != "two" || m.search != "" {
+		t.Fatalf("commit search clobbered the other query: commitSearch=%q search=%q", m.commitSearch, m.search)
+	}
+	if m.commitIdx != 1 || m.commits[m.commitIdx].Subject != "add two to a" {
+		t.Fatalf("subject search landed on commit %d %q, want 'add two to a'", m.commitIdx, m.commits[m.commitIdx].Subject)
+	}
+}
+
+func TestCommitSearchMatchesAuthorAndWraps(t *testing.T) {
+	m, _ := logModel(t)
+	screen(t, m, 140, 24)
+	focusCommitsPanel(t, m)
+
+	runSearch(t, m, "hunk test")
+	if m.commitIdx != 0 {
+		t.Fatalf("author search started at commit %d, want 0 (inclusive)", m.commitIdx)
+	}
+
+	m.command("n")
+	if m.commitIdx != 1 {
+		t.Fatalf("n did not advance to the next author match: got %d", m.commitIdx)
+	}
+	m.command("n")
+	if m.commitIdx != 2 {
+		t.Fatalf("n did not advance to the last author match: got %d", m.commitIdx)
+	}
+	m.command("n")
+	if m.commitIdx != 0 {
+		t.Fatalf("n did not wrap around: got %d, want 0", m.commitIdx)
+	}
+	m.command("N")
+	if m.commitIdx != 2 {
+		t.Fatalf("N did not wrap backwards: got %d, want 2", m.commitIdx)
+	}
+}
+
+func TestCommitSearchSmartcase(t *testing.T) {
+	m, _ := logModel(t)
+	screen(t, m, 140, 24)
+	focusCommitsPanel(t, m)
+
+	runSearch(t, m, "Two")
+	if m.commitIdx != 0 {
+		t.Errorf("uppercase query moved the cursor: landed on %d", m.commitIdx)
+	}
+	if !strings.Contains(m.msg, "no match") {
+		t.Errorf("status = %q, want a no-match message", m.msg)
+	}
+
+	runSearch(t, m, "two")
+	if m.commitIdx != 1 {
+		t.Fatalf("lowercase query did not match the subject: got %d", m.commitIdx)
+	}
+}
+
+func TestCommitSearchNoMatchKeepsCommit(t *testing.T) {
+	m, _ := logModel(t)
+	screen(t, m, 140, 24)
+	focusCommitsPanel(t, m)
+	m.loadCommit(1)
+	before := m.commitIdx
+
+	runSearch(t, m, "zzzznope")
+	if m.commitIdx != before {
+		t.Errorf("a failed search moved the commit: %d -> %d", before, m.commitIdx)
+	}
+	if !strings.Contains(m.msg, "no match") {
+		t.Errorf("status = %q, want a no-match message", m.msg)
+	}
+}
+
+func TestCommitAndDiffSearchStayIndependent(t *testing.T) {
+	m, _ := logModel(t)
+	screen(t, m, 140, 24)
+
+	runSearch(t, m, "hello")
+	if m.search != "hello" || m.commitSearch != "" {
+		t.Fatalf("diff search leaked: search=%q commitSearch=%q", m.search, m.commitSearch)
+	}
+	diffAt := m.cur
+
+	focusCommitsPanel(t, m)
+	runSearch(t, m, "two")
+	if m.commitSearch != "two" || m.search != "hello" {
+		t.Fatalf("commit search clobbered the diff query: search=%q commitSearch=%q", m.search, m.commitSearch)
+	}
+	if m.commitIdx != 1 {
+		t.Fatalf("commit search landed on %d, want 1", m.commitIdx)
+	}
+
+	m.focus = focusDiff
+	if !strings.Contains(m.rowSearchText(diffAt), "hello") && m.search != "hello" {
+		t.Fatalf("diff search was lost after a commit search")
+	}
+	m.command("n")
+	if m.search != "hello" {
+		t.Fatalf("n on the diff panel used the commit query: search=%q", m.search)
+	}
+}
