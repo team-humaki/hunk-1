@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -483,6 +484,57 @@ func TestUndoUnstagesTheLastStage(t *testing.T) {
 // Each stage is its own undo entry. Stage twice, undo twice: the first "u"
 // reverses only the second stage, the next "u" reverses the first, and a
 // third "u" has nothing left.
+func TestConsumeUnstageClearsPatchBeforeWholeFilesFail(t *testing.T) {
+	rec := stageRecord{patch: "PATCH", whole: []string{"a.bin"}}
+	unapplyN, unstageN := 0, 0
+	got, err := consumeUnstage(rec,
+		func(p string) error {
+			unapplyN++
+			if p != "PATCH" {
+				t.Fatalf("unapply %q", p)
+			}
+			return nil
+		},
+		func(paths []string) error {
+			unstageN++
+			return fmt.Errorf("index.lock")
+		},
+	)
+	if err == nil || err.Error() != "index.lock" {
+		t.Fatalf("err = %v, want index.lock", err)
+	}
+	if got.patch != "" {
+		t.Errorf("patch still %q after a successful unapply; retry would reverse it again", got.patch)
+	}
+	if len(got.whole) != 1 || got.whole[0] != "a.bin" {
+		t.Errorf("whole = %v, want the files still pending", got.whole)
+	}
+
+	// Retry: unapply must not run again; unstage succeeds and clears the rest.
+	got, err = consumeUnstage(got,
+		func(string) error {
+			t.Fatal("unapply retried after the patch was already reversed")
+			return nil
+		},
+		func(paths []string) error {
+			unstageN++
+			if len(paths) != 1 || paths[0] != "a.bin" {
+				t.Fatalf("unstage %v", paths)
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.patch != "" || got.whole != nil {
+		t.Errorf("finished record = %+v, want empty", got)
+	}
+	if unapplyN != 1 || unstageN != 2 {
+		t.Errorf("calls unapply=%d unstage=%d, want 1 and 2", unapplyN, unstageN)
+	}
+}
+
 func TestUndoReversesEachStageInOrder(t *testing.T) {
 	base := lines(60)
 	edited := replaceLine(base, 5, "FIRST")

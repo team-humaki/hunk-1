@@ -180,16 +180,39 @@ type stageRecord struct {
 // unstageLast reverses the most recent stage: the hunk patch comes back out of
 // the index, and any whole files staged alongside it are removed too. Earlier
 // stages stay on the stack.
+//
+// Each half of the record is cleared as soon as it succeeds, then written back
+// onto the stack. If UnapplyCached lands but UnstageFiles hits an index.lock
+// race, the next undo retries only the files — not the already-reversed patch,
+// which would fail permanently and block everything beneath.
 func (m *Model) unstageLast() error {
-	rec := m.undoStack[len(m.undoStack)-1]
-	if err := m.repo.UnapplyCached(rec.patch); err != nil {
+	i := len(m.undoStack) - 1
+	rec, err := consumeUnstage(m.undoStack[i], m.repo.UnapplyCached, m.repo.UnstageFiles)
+	m.undoStack[i] = rec
+	if err != nil {
 		return err
 	}
-	if err := m.repo.UnstageFiles(rec.whole); err != nil {
-		return err
-	}
-	m.undoStack = m.undoStack[:len(m.undoStack)-1]
+	m.undoStack = m.undoStack[:i]
 	return nil
+}
+
+// consumeUnstage runs unapply then unstage, clearing each field on success so a
+// later retry does not reverse work that already landed. A failed second call
+// returns the record with patch already empty.
+func consumeUnstage(rec stageRecord, unapply func(string) error, unstage func([]string) error) (stageRecord, error) {
+	if rec.patch != "" {
+		if err := unapply(rec.patch); err != nil {
+			return rec, err
+		}
+		rec.patch = ""
+	}
+	if len(rec.whole) > 0 {
+		if err := unstage(rec.whole); err != nil {
+			return rec, err
+		}
+		rec.whole = nil
+	}
+	return rec, nil
 }
 
 // markSnapshot captures a file's marks by content rather than by index, so they
