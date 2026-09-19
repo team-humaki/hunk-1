@@ -129,8 +129,8 @@ confirms which file was reloaded after a successful edit.
 Marking is `git add -p` without the one-hunk-at-a-time straitjacket: see the
 whole change, jump around, mark as you go, then write it all at once.
 
-The sidebar is the changed files as a directory tree, in alphabetical order —
-the same order `]` / `[` walk. `ctrl+w` moves focus to it (its rule lights up),
+The sidebar is the changed files as a directory tree, directories first then
+files, each group alphabetical — the same order `]` / `[` walk. `ctrl+w` moves focus to it (its rule lights up),
 after which `j` / `k` and ↑ / ↓ move line by line, folders included; every other
 key still works on the diff, and `ctrl+w` again or a click in the diff hands
 focus back. A folder under the cursor gets a muted bar instead of the accent —
