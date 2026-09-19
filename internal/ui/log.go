@@ -208,15 +208,70 @@ func marquee(s string, w, frame int) string {
 }
 
 // clipOrMarquee clips an unselected name with an ellipsis, and scrolls a
-// selected name that does not fit. Changing key snaps the scroll back to the
-// start of the name.
+// selected name that does not fit. Each key keeps its own frame so a commit
+// subject and a file name in log mode can both move. A key that was not drawn
+// this render is dropped, so selecting it again starts at the beginning.
 func (m *Model) clipOrMarquee(key, s string, w int, sel bool) string {
 	if !sel {
 		return clip(s, w)
 	}
-	if m.marqueeKey != key {
-		m.marqueeKey = key
-		m.marqueeFrame = 0
+	if m.marqueeFrames == nil {
+		m.marqueeFrames = map[string]int{}
 	}
-	return marquee(s, w, m.marqueeFrame)
+	if m.marqueeSeen == nil {
+		m.marqueeSeen = map[string]bool{}
+	}
+	m.marqueeSeen[key] = true
+	if _, ok := m.marqueeFrames[key]; !ok {
+		m.marqueeFrames[key] = 0
+	}
+	return marquee(s, w, m.marqueeFrames[key])
+}
+
+func (m *Model) pruneMarquee() {
+	for k := range m.marqueeFrames {
+		if !m.marqueeSeen[k] {
+			delete(m.marqueeFrames, k)
+		}
+	}
+	clear(m.marqueeSeen)
+}
+
+// selectedNameOverflows reports whether a selected sidebar row's name does not
+// fit, the only case that needs the marquee clock.
+func (m *Model) selectedNameOverflows() bool {
+	if !m.sidebar() {
+		return false
+	}
+	w := m.sidebarW()
+	if m.logMode && len(m.commits) > 0 {
+		c := m.commit()
+		subjW := w - lipgloss.Width(c.Short) - 3
+		if ansi.StringWidth(c.Subject) > subjW {
+			return true
+		}
+	}
+	tree := buildTree(m.files, m.collapsed)
+	sel := m.treeSel(tree)
+	if sel < 0 || sel >= len(tree) {
+		return false
+	}
+	return m.treeNameOverflows(tree[sel], w)
+}
+
+func (m *Model) treeNameOverflows(l treeLine, w int) bool {
+	if l.file < 0 {
+		room := w - lipgloss.Width(" "+l.prefix+"/")
+		return ansi.StringWidth(l.name) > room
+	}
+	f := m.files[l.file]
+	adds := fmt.Sprintf("+%d", f.Added)
+	dels := fmt.Sprintf(" -%d", f.Removed)
+	lead := " " + l.prefix
+	if m.staging() {
+		symbol, _ := m.fileGlyph(l.file, f, m.st.sidebar)
+		lead += symbol + " "
+	}
+	room := w - lipgloss.Width(lead) - lipgloss.Width(adds+dels) - 2
+	return ansi.StringWidth(l.name) > max(room, 1)
 }

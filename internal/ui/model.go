@@ -162,12 +162,15 @@ type Model struct {
 	toastText  string
 	toastUntil time.Time
 
-	// marqueeFrame is the selected sidebar row's scroll clock. marqueeKey is
-	// which row it belongs to, so changing selection snaps back to the start.
-	// marqueeArmed is whether a tick is already scheduled.
-	marqueeFrame int
-	marqueeKey   string
-	marqueeArmed bool
+	// marqueeFrames is the scroll clock for each selected sidebar row that is
+	// currently on screen. Log mode draws a commit and a file in the same
+	// frame; one slot would reset the other every call. marqueeSeen is the
+	// keys clipOrMarquee touched this render, so rows that left the selection
+	// snap back to the start next time. marqueeArmed is whether a tick is
+	// already scheduled.
+	marqueeFrames map[string]int
+	marqueeSeen   map[string]bool
+	marqueeArmed  bool
 
 	// hints are the clickable option zones on the status bar, rebuilt on every
 	// render so mouse hit-testing matches exactly what is on screen.
@@ -526,7 +529,7 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) startMarquee() tea.Cmd {
-	if m.marqueeArmed || !m.sidebar() {
+	if m.marqueeArmed || !m.sidebar() || !m.selectedNameOverflows() {
 		return nil
 	}
 	m.marqueeArmed = true
@@ -574,7 +577,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.sidebar() {
 			return m, nil
 		}
-		m.marqueeFrame++
+		for k := range m.marqueeFrames {
+			m.marqueeFrames[k]++
+		}
 		return m, m.startMarquee()
 
 	case tea.KeyPressMsg:
@@ -723,7 +728,7 @@ func (m *Model) command(key string) tea.Cmd {
 		m.focus = focusDiff
 		m.rebuildIfNeeded()
 	case "f":
-		return m.withMarquee(m.toggleFollow())
+		return m.toggleFollow()
 	case "i":
 		m.toggleIgnoreWS()
 	case "+", "=":
@@ -750,14 +755,14 @@ func (m *Model) command(key string) tea.Cmd {
 		m.showHelp = true
 
 	case "E":
-		return m.withMarquee(m.openEditor())
+		return m.openEditor()
 
 	case "space", "a", "d", "w", "u":
 		if m.staging() {
 			m.handleMarkKey(key)
 		}
 	}
-	return m.startMarquee()
+	return nil
 }
 
 // toggleFollow pauses or resumes live-follow. Resuming reloads once right away
@@ -1700,8 +1705,11 @@ func (m *Model) renderUnifiedRow(r Row, w int, hl func(string) []synSpan) string
 // for it.
 func (m *Model) renderSidebar() []string {
 	if !m.sidebar() {
+		clear(m.marqueeFrames)
+		clear(m.marqueeSeen)
 		return nil
 	}
+	defer m.pruneMarquee()
 
 	h, w := m.bodyHeight(), m.sidebarW()
 	if m.logMode {

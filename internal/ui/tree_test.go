@@ -172,15 +172,78 @@ func TestTreeTruncatesNamesButKeepsCounts(t *testing.T) {
 }
 
 func TestSelectedTreeNameMarqueeKeepsCounts(t *testing.T) {
-	m := newTestModel(t, treeDiff("a_really_quite_long_file_name_indeed.go"))
+	const path = "a_really_quite_long_file_name_indeed.go"
+	m := newTestModel(t, treeDiff(path))
 	m.sideWidth = SidebarWidthMin
-	m.marqueeFrame = marqueeHold + 8
+	frame0 := ansi.Cut(screen(t, m, 120, 5)[0], 0, SidebarWidthMin)
+	m.marqueeFrames["file:"+path] = marqueeHold + 8
 	side := ansi.Cut(screen(t, m, 120, 5)[0], 0, SidebarWidthMin)
 	if !strings.HasSuffix(strings.TrimRight(side, " "), "+1 -1") {
 		t.Errorf("scrolled selected row = %q, want counts flush right", side)
 	}
 	if ansi.StringWidth(side) != SidebarWidthMin {
 		t.Errorf("scrolled selected row width %d, want %d", ansi.StringWidth(side), SidebarWidthMin)
+	}
+	if strings.Contains(side, "…") {
+		t.Errorf("scrolled selected row = %q, want a window not an ellipsis", side)
+	}
+	if side == frame0 {
+		t.Errorf("scrolled selected row still %q; mid-scroll should move the name", side)
+	}
+}
+
+func TestClipOrMarqueeKeepsIndependentFrames(t *testing.T) {
+	m := &Model{}
+	const w = 8
+	a := "abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+	b := "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcd"
+	m.clipOrMarquee("commit:1", a, w, true)
+	m.marqueeFrames["commit:1"] = 19
+	gotA := m.clipOrMarquee("commit:1", a, w, true)
+	gotB := m.clipOrMarquee("file:2", b, w, true)
+	if m.marqueeFrames["commit:1"] != 19 {
+		t.Fatalf("commit frame reset to %d after drawing the file", m.marqueeFrames["commit:1"])
+	}
+	if gotB != marquee(b, w, 0) {
+		t.Fatalf("new file started at %q, want frame 0", gotB)
+	}
+	if gotA != marquee(a, w, 19) {
+		t.Fatalf("commit window %q, want frame 19", gotA)
+	}
+	for range 20 {
+		m.clipOrMarquee("commit:1", a, w, true)
+		m.clipOrMarquee("file:2", b, w, true)
+		m.marqueeFrames["commit:1"]++
+		m.marqueeFrames["file:2"]++
+	}
+	winA := m.clipOrMarquee("commit:1", a, w, true)
+	winB := m.clipOrMarquee("file:2", b, w, true)
+	if winA == marquee(a, w, 0) {
+		t.Fatal("commit still at frame 0 after interleaved ticks")
+	}
+	if winB == marquee(b, w, 0) {
+		t.Fatal("file still at frame 0 after interleaved ticks")
+	}
+}
+
+func TestStartMarqueeSkipsWhenNothingOverflows(t *testing.T) {
+	m := newTestModel(t, treeDiff("a.go"))
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 10})
+	m = updated.(*Model)
+	m.marqueeArmed = false
+	if cmd := m.startMarquee(); cmd != nil {
+		t.Fatal("ticked a sidebar whose names all fit")
+	}
+}
+
+func TestStartMarqueeArmsWhenSelectedNameOverflows(t *testing.T) {
+	m := newTestModel(t, treeDiff("a_really_quite_long_file_name_indeed.go"))
+	m.sideWidth = SidebarWidthMin
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 10})
+	m = updated.(*Model)
+	m.marqueeArmed = false
+	if cmd := m.startMarquee(); cmd == nil {
+		t.Fatal("did not tick a truncated selected name")
 	}
 }
 
