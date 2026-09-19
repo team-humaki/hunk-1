@@ -142,7 +142,7 @@ func (m *Model) commitLine(idx, w int) string {
 	if idx == m.commitIdx {
 		style = m.st.sidebarSel
 	}
-	subjW := w - lipgloss.Width(c.Short) - 3
+	subjW := commitSubjectWidth(w, c.Short)
 	subj := m.clipOrMarquee("commit:"+c.SHA, c.Subject, subjW, idx == m.commitIdx)
 	label := fmt.Sprintf(" %s  %s", c.Short, subj)
 	return fit(style.Render(label), 0, w, style)
@@ -225,6 +225,9 @@ func (m *Model) clipOrMarquee(key, s string, w int, sel bool) string {
 	if _, ok := m.marqueeFrames[key]; !ok {
 		m.marqueeFrames[key] = 0
 	}
+	if w > 0 && ansi.StringWidth(s) > w {
+		m.marqueeOverflow = true
+	}
 	return marquee(s, w, m.marqueeFrames[key])
 }
 
@@ -237,8 +240,34 @@ func (m *Model) pruneMarquee() {
 	clear(m.marqueeSeen)
 }
 
+// commitSubjectWidth is the columns a commit subject may occupy in a sidebar
+// of width w. commitLine and the overflow check share it so a later layout
+// change cannot leave them computing different rooms.
+func commitSubjectWidth(w int, short string) int {
+	return w - lipgloss.Width(short) - 3
+}
+
+// treeNameRoom is the columns a tree row's name may occupy in a sidebar of
+// width w. treeRow and the overflow check share it so the clock and the
+// rendered width cannot drift.
+func (m *Model) treeNameRoom(l treeLine, w int) int {
+	if l.file < 0 {
+		return w - lipgloss.Width(" "+l.prefix+"/")
+	}
+	f := m.files[l.file]
+	adds := fmt.Sprintf("+%d", f.Added)
+	dels := fmt.Sprintf(" -%d", f.Removed)
+	lead := " " + l.prefix
+	if m.staging() {
+		symbol, _ := m.fileGlyph(l.file, f, m.st.sidebar)
+		lead += symbol + " "
+	}
+	return max(w-lipgloss.Width(lead)-lipgloss.Width(adds+dels)-2, 1)
+}
+
 // selectedNameOverflows reports whether a selected sidebar row's name does not
-// fit, the only case that needs the marquee clock.
+// fit, the only case that needs the marquee clock. Keys and resizes use this
+// before the next paint; ticks reuse marqueeOverflow from the last paint.
 func (m *Model) selectedNameOverflows() bool {
 	if !m.sidebar() {
 		return false
@@ -246,8 +275,7 @@ func (m *Model) selectedNameOverflows() bool {
 	w := m.sidebarW()
 	if m.logMode && len(m.commits) > 0 {
 		c := m.commit()
-		subjW := w - lipgloss.Width(c.Short) - 3
-		if ansi.StringWidth(c.Subject) > subjW {
+		if ansi.StringWidth(c.Subject) > commitSubjectWidth(w, c.Short) {
 			return true
 		}
 	}
@@ -260,18 +288,5 @@ func (m *Model) selectedNameOverflows() bool {
 }
 
 func (m *Model) treeNameOverflows(l treeLine, w int) bool {
-	if l.file < 0 {
-		room := w - lipgloss.Width(" "+l.prefix+"/")
-		return ansi.StringWidth(l.name) > room
-	}
-	f := m.files[l.file]
-	adds := fmt.Sprintf("+%d", f.Added)
-	dels := fmt.Sprintf(" -%d", f.Removed)
-	lead := " " + l.prefix
-	if m.staging() {
-		symbol, _ := m.fileGlyph(l.file, f, m.st.sidebar)
-		lead += symbol + " "
-	}
-	room := w - lipgloss.Width(lead) - lipgloss.Width(adds+dels) - 2
-	return ansi.StringWidth(l.name) > max(room, 1)
+	return ansi.StringWidth(l.name) > m.treeNameRoom(l, w)
 }

@@ -601,3 +601,48 @@ func TestFoldingADirectory(t *testing.T) {
 		t.Errorf("- in the diff changed the tree: %v", names())
 	}
 }
+
+func TestSelectedNameOverflowsAgreesWithPaint(t *testing.T) {
+	long := newTestModel(t, treeDiff("a_really_quite_long_file_name_indeed.go"))
+	long.sideWidth = SidebarWidthMin
+	screen(t, long, 120, 10)
+	if !long.marqueeOverflow {
+		t.Fatal("paint did not record an overflowing selected name")
+	}
+	if !long.selectedNameOverflows() {
+		t.Fatal("compute disagrees with paint on an overflowing name")
+	}
+
+	short := newTestModel(t, treeDiff("a.go"))
+	screen(t, short, 120, 10)
+	if short.marqueeOverflow || short.selectedNameOverflows() {
+		t.Fatal("a name that fits should not overflow")
+	}
+}
+
+func TestMarqueeTickReusesPaintOverflow(t *testing.T) {
+	m := newTestModel(t, treeDiff("a_really_quite_long_file_name_indeed.go"))
+	m.sideWidth = SidebarWidthMin
+	screen(t, m, 120, 10)
+	m.files = nil // compute would now say nothing overflows
+	m.marqueeArmed = false
+	if cmd := m.startMarqueeFromPaint(); cmd == nil {
+		t.Fatal("tick path required a tree rebuild")
+	}
+	m.marqueeArmed = false
+	if cmd := m.startMarquee(); cmd != nil {
+		t.Fatal("compute path should see no files")
+	}
+}
+
+func TestCommitSubjectWidthSharedWithCommitLine(t *testing.T) {
+	m, _ := logModel(t)
+	m.sideWidth = SidebarWidthMin
+	screen(t, m, 120, 16)
+	c := m.commit()
+	w := m.sidebarW()
+	room := commitSubjectWidth(w, c.Short)
+	if room != w-ansi.StringWidth(c.Short)-3 {
+		t.Fatalf("commitSubjectWidth = %d, want %d", room, w-ansi.StringWidth(c.Short)-3)
+	}
+}

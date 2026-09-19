@@ -167,10 +167,13 @@ type Model struct {
 	// frame; one slot would reset the other every call. marqueeSeen is the
 	// keys clipOrMarquee touched this render, so rows that left the selection
 	// snap back to the start next time. marqueeArmed is whether a tick is
-	// already scheduled.
-	marqueeFrames map[string]int
-	marqueeSeen   map[string]bool
-	marqueeArmed  bool
+	// already scheduled. marqueeOverflow is whether the last sidebar paint
+	// drew a selected name that did not fit — marquee ticks reuse that so
+	// they do not rebuild the tree just to answer the same boolean.
+	marqueeFrames   map[string]int
+	marqueeSeen     map[string]bool
+	marqueeArmed    bool
+	marqueeOverflow bool
 
 	// hints are the clickable option zones on the status bar, rebuilt on every
 	// render so mouse hit-testing matches exactly what is on screen.
@@ -529,7 +532,17 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) startMarquee() tea.Cmd {
-	if m.marqueeArmed || !m.sidebar() || !m.selectedNameOverflows() {
+	return m.armMarquee(m.selectedNameOverflows())
+}
+
+// startMarqueeFromPaint arms the clock from the last sidebar paint, so a
+// 180ms tick does not rebuild the tree just to ask whether a name overflowed.
+func (m *Model) startMarqueeFromPaint() tea.Cmd {
+	return m.armMarquee(m.marqueeOverflow)
+}
+
+func (m *Model) armMarquee(overflow bool) tea.Cmd {
+	if m.marqueeArmed || !m.sidebar() || !overflow {
 		return nil
 	}
 	m.marqueeArmed = true
@@ -580,7 +593,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for k := range m.marqueeFrames {
 			m.marqueeFrames[k]++
 		}
-		return m, m.startMarquee()
+		return m, m.startMarqueeFromPaint()
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -593,11 +606,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case editorDoneMsg:
 		// Whatever was saved should be on screen now, followed or not.
+		// liveReload can move the selection via restoreCursor; wrap so a
+		// newly selected name that does not fit starts scrolling without
+		// waiting for a keystroke or resize.
 		m.liveReload()
 		if text := editorDoneToast(msg); text != "" {
-			return m, m.toast(text)
+			return m, m.withMarquee(m.toast(text))
 		}
-		return m, nil
+		return m, m.withMarquee(nil)
 
 	case toastDoneMsg:
 		// A newer toast may have replaced the one this tick was for.
@@ -609,11 +625,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fsDirtyMsg:
 		// The tree changed. Reload while preserving marks and cursor, then wait
 		// for the next change. If following was paused since this fired, drop it.
+		// withMarquee so a live-follow that lands on a truncated name arms the
+		// clock instead of sitting still until the next keystroke or resize.
 		if !m.live || m.watch == nil {
 			return m, nil
 		}
 		m.liveReload()
-		return m, m.watch.wait()
+		return m, m.withMarquee(m.watch.wait())
 	}
 	return m, nil
 }
@@ -1707,8 +1725,10 @@ func (m *Model) renderSidebar() []string {
 	if !m.sidebar() {
 		clear(m.marqueeFrames)
 		clear(m.marqueeSeen)
+		m.marqueeOverflow = false
 		return nil
 	}
+	m.marqueeOverflow = false
 	defer m.pruneMarquee()
 
 	h, w := m.bodyHeight(), m.sidebarW()
@@ -1775,7 +1795,7 @@ func (m *Model) treeRow(tree []treeLine, idx, w int, sel bool) string {
 		case sel:
 			conn = strings.TrimSuffix(conn, "─") + "-"
 		}
-		room := w - lipgloss.Width(" "+l.prefix+"/")
+		room := m.treeNameRoom(l, w)
 		line := style.Render(" "+l.prefix[:len(l.prefix)-len("├─")]) +
 			name.Render(conn+m.clipOrMarquee("dir:"+l.path, l.name, room, sel)+"/")
 		return fit(line, 0, w, style)
@@ -1800,8 +1820,8 @@ func (m *Model) treeRow(tree []treeLine, idx, w int, sel bool) string {
 		lead += symStyle.Render(symbol) + style.Render(" ")
 	}
 	// The counts sit flush right, so the name takes what is left minus a gap.
-	room := w - lipgloss.Width(lead) - lipgloss.Width(adds+dels) - 2
-	name := m.clipOrMarquee("file:"+f.Path(), l.name, max(room, 1), sel)
+	room := m.treeNameRoom(l, w)
+	name := m.clipOrMarquee("file:"+f.Path(), l.name, room, sel)
 	gap := max(w-lipgloss.Width(lead+name)-lipgloss.Width(adds+dels), 1)
 	return fit(lead+style.Render(name+strings.Repeat(" ", gap))+counts, 0, w, style)
 }
