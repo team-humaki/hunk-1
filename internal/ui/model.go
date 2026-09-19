@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -1172,12 +1173,28 @@ func (m *Model) undo() {
 		m.msg = "nothing to undo"
 		return
 	}
+	skipped := false
 	if err := m.unstageLast(); err != nil {
-		m.msg = "undo failed: " + firstLine(err.Error())
-		return
+		if !errors.Is(err, errSkippedStuckUndo) {
+			m.msg = "undo failed: " + firstLine(err.Error())
+			return
+		}
+		skipped = true
 	}
 	if err := m.reload(); err != nil {
+		if skipped {
+			m.msg = "skipped stuck undo (could not re-read the working tree: " + firstLine(err.Error()) + ")"
+			return
+		}
 		m.msg = "undone (could not re-read the working tree: " + firstLine(err.Error()) + ")"
+		return
+	}
+	if skipped {
+		if len(m.undoStack) > 0 {
+			m.msg = "skipped stuck undo  ·  u to undo more"
+			return
+		}
+		m.msg = "skipped stuck undo"
 		return
 	}
 	if len(m.undoStack) > 0 {
@@ -1900,7 +1917,7 @@ func (m *Model) renderHelp() string {
 			[2]string{"space", "mark this hunk and move to the next one in the file"},
 			[2]string{"a / d", "mark / unmark this file, or every file in a folder"},
 			[2]string{"w", "stage what is marked"},
-			[2]string{"u", "undo the last stage"},
+			[2]string{"u", "undo the last stage (skips a stuck entry)"},
 			[2]string{"E", "edit this file at the cursor in $VISUAL / $EDITOR"},
 			[2]string{"f", "pause / resume following file changes"},
 			[2]string{"i", "ignore / show whitespace-only changes"},

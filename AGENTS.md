@@ -101,7 +101,9 @@ the only mutating commands in the codebase, both in `internal/git/git.go`.
 the mark and stage keys leave the repository byte-identical. hunk
 has no code path that writes to a working-tree file. Any change near staging
 needs a test asserting the working tree is byte-identical afterwards —
-`TestStageOneHunkOfThree` is the pattern.
+`TestStageOneHunkOfThree` is the pattern. If an undo's reverse patch no longer
+applies because something else changed the index, drop that stack entry so
+older undos stay reachable; do not leave `u` stuck on the same error.
 
 **Hunks are emitted verbatim.** `File.Patch` concatenates the fragments exactly
 as parsed and lets `git apply --recount` fix the line counts. Do not recompute

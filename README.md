@@ -112,7 +112,7 @@ review mode you get:
 | `space` | mark this hunk and move to the next one in the file |
 | `a` / `d` | mark / unmark every hunk in this file, or every file in a selected folder |
 | `w` | stage what is marked |
-| `u` | undo the last stage |
+| `u` | undo the last stage (skips a stuck entry if the index changed underneath) |
 | `E` | edit the file in your editor, at the cursor's line |
 | `f` | pause / resume following the working tree |
 | `i` | ignore / show whitespace-only changes |

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -532,6 +533,99 @@ func TestConsumeUnstageClearsPatchBeforeWholeFilesFail(t *testing.T) {
 	}
 	if unapplyN != 1 || unstageN != 2 {
 		t.Errorf("calls unapply=%d unstage=%d, want 1 and 2", unapplyN, unstageN)
+	}
+}
+
+func TestApplyUnstageResultDropsPermanentFailure(t *testing.T) {
+	stack := []stageRecord{
+		{patch: "OLDER"},
+		{patch: "TOP"},
+	}
+	lock, err := applyUnstageResult(stack, stageRecord{patch: "TOP"}, fmt.Errorf("index.lock"))
+	if err == nil || !isIndexLock(err) {
+		t.Fatalf("index.lock err = %v", err)
+	}
+	if len(lock) != 2 || lock[1].patch != "TOP" {
+		t.Errorf("index.lock should keep the top entry, got %+v", lock)
+	}
+
+	skip, err := applyUnstageResult(stack, stack[1], fmt.Errorf("error: patch does not apply"))
+	if !errors.Is(err, errSkippedStuckUndo) {
+		t.Fatalf("permanent err = %v, want skipped stuck undo", err)
+	}
+	if len(skip) != 1 || skip[0].patch != "OLDER" {
+		t.Errorf("permanent failure should drop the top entry, got %+v", skip)
+	}
+
+	ok, err := applyUnstageResult(stack, stageRecord{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ok) != 1 || ok[0].patch != "OLDER" {
+		t.Errorf("success should pop, got %+v", ok)
+	}
+}
+
+// If another git process unstages the top hunk, reverse-applying that patch
+// fails forever. Drop it so "u" can still reverse the older stage underneath.
+func TestUndoSkipsStuckTopAndReachesOlderStage(t *testing.T) {
+	base := lines(60)
+	edited := replaceLine(base, 5, "FIRST")
+	edited = replaceLine(edited, 30, "SECOND")
+
+	m, repo := gitModel(t, map[string]string{"a.txt": base}, map[string]string{"a.txt": edited})
+
+	m.moveTo(m.view.HunkRows[0])
+	m.handleKey(keyPress(" "))
+	m.handleKey(keyPress("w"))
+	m.moveTo(m.view.HunkRows[0])
+	m.handleKey(keyPress(" "))
+	m.handleKey(keyPress("w"))
+	if len(m.undoStack) != 2 {
+		t.Fatalf("undo stack %d, want 2", len(m.undoStack))
+	}
+	top := m.undoStack[1]
+	if top.patch == "" {
+		t.Fatal("expected a patch on the top undo")
+	}
+	if err := repo.UnapplyCached(top.patch); err != nil {
+		t.Fatalf("setup: unstage top hunk from outside: %v", err)
+	}
+	cached := gitOut(t, repo, "diff", "--cached")
+	if strings.Contains(cached, "SECOND") {
+		t.Fatalf("setup failed, SECOND still staged:\n%s", cached)
+	}
+	if !strings.Contains(cached, "FIRST") {
+		t.Fatalf("setup failed, FIRST should still be staged:\n%s", cached)
+	}
+
+	before, err := os.ReadFile(filepath.Join(repo.Dir, "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m.handleKey(keyPress("u"))
+	if !strings.Contains(m.msg, "skipped stuck undo") {
+		t.Errorf("first u message = %q, want skipped stuck undo", m.msg)
+	}
+	cached = gitOut(t, repo, "diff", "--cached")
+	if !strings.Contains(cached, "FIRST") {
+		t.Errorf("skipping the stuck undo should leave FIRST staged:\n%s", cached)
+	}
+	if strings.Contains(cached, "SECOND") {
+		t.Errorf("SECOND should stay unstaged:\n%s", cached)
+	}
+
+	m.handleKey(keyPress("u"))
+	if cached := gitOut(t, repo, "diff", "--cached"); strings.TrimSpace(cached) != "" {
+		t.Errorf("second u should unstage FIRST:\n%s", cached)
+	}
+	after, err := os.ReadFile(filepath.Join(repo.Dir, "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Error("undo modified the working-tree file")
 	}
 }
 

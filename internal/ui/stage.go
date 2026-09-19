@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -11,6 +12,10 @@ import (
 	"github.com/wmarquardt/hunk/internal/diff"
 	"github.com/wmarquardt/hunk/internal/git"
 )
+
+// errSkippedStuckUndo means the top undo no longer applies (the index was
+// mutated outside hunk) and was dropped so older entries stay reachable.
+var errSkippedStuckUndo = errors.New("skipped stuck undo")
 
 // wholeFile is the hunk index used to mark a file that has no hunks to choose
 // between — a binary file, which git can only stage whole.
@@ -185,15 +190,37 @@ type stageRecord struct {
 // onto the stack. If UnapplyCached lands but UnstageFiles hits an index.lock
 // race, the next undo retries only the files — not the already-reversed patch,
 // which would fail permanently and block everything beneath.
+//
+// If the reverse fails for any other reason (another terminal reset the index,
+// a hook rewrote it), the top entry is dropped so it cannot strand the rest of
+// the stack. The next "u" then reaches the older undo.
 func (m *Model) unstageLast() error {
 	i := len(m.undoStack) - 1
 	rec, err := consumeUnstage(m.undoStack[i], m.repo.UnapplyCached, m.repo.UnstageFiles)
-	m.undoStack[i] = rec
-	if err != nil {
-		return err
+	m.undoStack, err = applyUnstageResult(m.undoStack, rec, err)
+	return err
+}
+
+func isIndexLock(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "index.lock")
+}
+
+// applyUnstageResult updates the undo stack after one consumeUnstage call.
+// A clean success pops the entry. An index.lock keeps the remaining half for
+// retry. Any other failure pops the stuck entry so older undos stay reachable.
+func applyUnstageResult(stack []stageRecord, rec stageRecord, err error) ([]stageRecord, error) {
+	i := len(stack) - 1
+	if i < 0 {
+		return stack, err
 	}
-	m.undoStack = m.undoStack[:i]
-	return nil
+	if err == nil {
+		return stack[:i], nil
+	}
+	if isIndexLock(err) {
+		stack[i] = rec
+		return stack, err
+	}
+	return stack[:i], fmt.Errorf("%w: %s", errSkippedStuckUndo, firstLine(err.Error()))
 }
 
 // consumeUnstage runs unapply then unstage, clearing each field on success so a
