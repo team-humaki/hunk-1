@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -11,6 +12,10 @@ import (
 	"github.com/wmarquardt/hunk/internal/diff"
 	"github.com/wmarquardt/hunk/internal/git"
 )
+
+// errSkippedStuckUndo means the top undo no longer applies (the index was
+// mutated outside hunk) and was dropped so older entries stay reachable.
+var errSkippedStuckUndo = errors.New("skipped stuck undo")
 
 // wholeFile is the hunk index used to mark a file that has no hunks to choose
 // between — a binary file, which git can only stage whole.
@@ -164,21 +169,77 @@ func (m *Model) stageMarked() (string, error) {
 		return "", err
 	}
 
-	// Remember exactly what went in so "u" can reverse this stage and nothing
-	// else.
-	m.lastPatch, m.lastWhole = patch.String(), wholeFiles
+	// Push this stage so "u" can reverse it without forgetting earlier ones.
+	m.undoStack = append(m.undoStack, stageRecord{patch: patch.String(), whole: wholeFiles})
 
 	hunks, files := m.marks.total()
 	return fmt.Sprintf("staged %s in %s", plural(hunks, "hunk"), plural(files, "file")), nil
 }
 
+// stageRecord is one stageMarked call: a hunk patch and/or whole files.
+type stageRecord struct {
+	patch string
+	whole []string
+}
+
 // unstageLast reverses the most recent stage: the hunk patch comes back out of
-// the index, and any whole files staged alongside it are removed too.
+// the index, and any whole files staged alongside it are removed too. Earlier
+// stages stay on the stack.
+//
+// Each half of the record is cleared as soon as it succeeds, then written back
+// onto the stack. If UnapplyCached lands but UnstageFiles hits an index.lock
+// race, the next undo retries only the files — not the already-reversed patch,
+// which would fail permanently and block everything beneath.
+//
+// If the reverse fails for any other reason (another terminal reset the index,
+// a hook rewrote it), the top entry is dropped so it cannot strand the rest of
+// the stack. The next "u" then reaches the older undo.
 func (m *Model) unstageLast() error {
-	if err := m.repo.UnapplyCached(m.lastPatch); err != nil {
-		return err
+	i := len(m.undoStack) - 1
+	rec, err := consumeUnstage(m.undoStack[i], m.repo.UnapplyCached, m.repo.UnstageFiles)
+	m.undoStack, err = applyUnstageResult(m.undoStack, rec, err)
+	return err
+}
+
+func isIndexLock(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "index.lock")
+}
+
+// applyUnstageResult updates the undo stack after one consumeUnstage call.
+// A clean success pops the entry. An index.lock keeps the remaining half for
+// retry. Any other failure pops the stuck entry so older undos stay reachable.
+func applyUnstageResult(stack []stageRecord, rec stageRecord, err error) ([]stageRecord, error) {
+	i := len(stack) - 1
+	if i < 0 {
+		return stack, err
 	}
-	return m.repo.UnstageFiles(m.lastWhole)
+	if err == nil {
+		return stack[:i], nil
+	}
+	if isIndexLock(err) {
+		stack[i] = rec
+		return stack, err
+	}
+	return stack[:i], fmt.Errorf("%w: %s", errSkippedStuckUndo, firstLine(err.Error()))
+}
+
+// consumeUnstage runs unapply then unstage, clearing each field on success so a
+// later retry does not reverse work that already landed. A failed second call
+// returns the record with patch already empty.
+func consumeUnstage(rec stageRecord, unapply func(string) error, unstage func([]string) error) (stageRecord, error) {
+	if rec.patch != "" {
+		if err := unapply(rec.patch); err != nil {
+			return rec, err
+		}
+		rec.patch = ""
+	}
+	if len(rec.whole) > 0 {
+		if err := unstage(rec.whole); err != nil {
+			return rec, err
+		}
+		rec.whole = nil
+	}
+	return rec, nil
 }
 
 // markSnapshot captures a file's marks by content rather than by index, so they
